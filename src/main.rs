@@ -23,6 +23,9 @@ enum Command {
         /// Directory to store document snapshots
         #[arg(long, default_value = "data")]
         data_dir: String,
+        /// Address for HTTP health checks (GET /health)
+        #[arg(long, default_value = "0.0.0.0:8080")]
+        health_addr: String,
     },
     /// Run an interactive client
     Client {
@@ -61,7 +64,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     match args.command {
-        Command::Server { addr, data_dir } => server::run(&addr, &data_dir).await?,
+        Command::Server {
+            addr,
+            data_dir,
+            health_addr,
+        } => server::run(&addr, &data_dir, &health_addr).await?,
         Command::Client {
             addr,
             user,

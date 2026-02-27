@@ -19,6 +19,12 @@ Uses [Carnelia](https://github.com/Agate-DB/Carnelia) as the backend CRDT engine
 cargo run -- server --addr 0.0.0.0:4000 --data-dir data
 ```
 
+Health check (HTTP GET):
+
+```powershell
+curl http://127.0.0.1:8080/health
+```
+
 ### 2) Connect clients
 
 ```powershell
@@ -149,10 +155,23 @@ Via docker-compose:
 docker compose up --build
 ```
 
+Set your ngrok token (required for TCP tunnels) and watch the ngrok output in the container logs:
+
+```powershell
+$env:NGROK_AUTHTOKEN = "<your-token>"
+docker compose up --build
+```
+
 You can still connect from clients using the host IP or from ngrok by forwarding port 4000 on the host:
 
 ```powershell
 ngrok tcp 4000
+```
+
+The container also serves a health endpoint on port 8080:
+
+```powershell
+curl http://127.0.0.1:8080/health
 ```
 
 ## Protocol

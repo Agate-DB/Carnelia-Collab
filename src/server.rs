@@ -28,7 +28,15 @@ struct SharedState {
     storage: Storage,
 }
 
-pub async fn run(addr: &str, data_dir: &str) -> Result<(), Box<dyn Error>> {
+pub async fn run(addr: &str, data_dir: &str, health_addr: &str) -> Result<(), Box<dyn Error>> {
+    let health_listener = TcpListener::bind(health_addr).await?;
+    println!("[health] listening on {}", health_addr);
+    tokio::spawn(async move {
+        if let Err(err) = run_health_loop(health_listener).await {
+            println!("[health] error: {}", err);
+        }
+    });
+
     let listener = TcpListener::bind(addr).await?;
     println!("[server] listening on {}", addr);
 
@@ -53,6 +61,44 @@ pub async fn run(addr: &str, data_dir: &str) -> Result<(), Box<dyn Error>> {
             }
         });
     }
+}
+
+async fn run_health_loop(listener: TcpListener) -> Result<(), Box<dyn Error>> {
+    loop {
+        let (stream, _) = listener.accept().await?;
+        tokio::spawn(async move {
+            if let Err(err) = handle_health_conn(stream).await {
+                println!("[health] request error: {}", err);
+            }
+        });
+    }
+}
+
+async fn handle_health_conn(stream: TcpStream) -> Result<(), Box<dyn Error>> {
+    let (reader, mut writer) = stream.into_split();
+    let mut lines = BufReader::new(reader).lines();
+
+    let request_line = match lines.next_line().await? {
+        Some(line) => line,
+        None => return Ok(()),
+    };
+
+    let ok = request_line.starts_with("GET /health");
+    if ok {
+        writer
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nOK",
+            )
+            .await?;
+    } else {
+        writer
+            .write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nNot Found",
+            )
+            .await?;
+    }
+
+    Ok(())
 }
 
 async fn handle_connection(
