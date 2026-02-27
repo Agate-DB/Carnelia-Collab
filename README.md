@@ -1,6 +1,8 @@
 # Carnelia Collab
 
-Barebones Rust CLI backend + client for collaborative plain-text editing over TCP.
+Barebones Rust CLI client and server for collaborative plain-text peer to peer editing over TCP.
+
+Uses [Carnelia](https://github.com/Agate-DB/Carnelia) as the backend CRDT engine.
 
 ## What It Does
 - TCP server that maintains room/doc text state.
@@ -141,20 +143,7 @@ For ngrok, use the public host:port as the `--addr` value.
 
 ## Docker Deployment
 Build and run the server in a container and publish port 4000.
-
-Build the image:
-
-```powershell
-docker build -t collab-cli .
-```
-
-Run the container:
-
-```powershell
-docker run --rm -p 4000:4000 -v ${PWD}\data:/app/data collab-cli
-```
-
-Or via docker-compose:
+Via docker-compose:
 
 ```powershell
 docker compose up --build
@@ -174,7 +163,4 @@ Line-delimited JSON over TCP.
 See `src/protocol.rs` for full message schemas.
 
 ## Notes
-- This is an intentionally minimal backend.
 - The current `/sync` command provides snapshot sync (full text) for now.
-- For full CRDT delta exchange, wire MDCS delta serialization once available.
-- The sample files in `src/` are preserved as references to MDCS SDK usage patterns.
