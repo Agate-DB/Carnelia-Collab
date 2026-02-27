@@ -1,0 +1,9 @@
+version: "2"
+
+# Do not commit real tokens to source control. Use:
+#   ngrok config add-authtoken <token>
+
+tunnels:
+  collab_tcp:
+    proto: tcp
+    addr: 4000

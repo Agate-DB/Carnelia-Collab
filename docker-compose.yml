@@ -1,0 +1,10 @@
+version: "3.9"
+services:
+  collab:
+    build: .
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
