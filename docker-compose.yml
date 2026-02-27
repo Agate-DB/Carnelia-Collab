@@ -1,5 +1,7 @@
+name: carnelia-collab
+
 services:
-  collab:
+  server:
     build: .
     ports:
       - "4000:4000"
