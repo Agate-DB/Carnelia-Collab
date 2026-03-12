@@ -1,10 +1,18 @@
-use crate::protocol::{ClientMessage, Op, ServerMessage};
+use crate::protocol::{
+    decode_sync_response,
+    decode_update,
+    doc_id_from_scoped_user_id,
+    encode_sync_request,
+    encode_update,
+    make_scoped_user_id,
+    Op,
+};
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 use crossterm::style::{Attribute, Color, SetAttribute, SetBackgroundColor, SetForegroundColor};
-use mdcs_sdk::TextDoc;
+use mdcs_sdk::{Message, TextDoc};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{stdout, Write};
@@ -38,7 +46,7 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
     let stream = TcpStream::connect(addr).await?;
     let (reader, writer) = stream.into_split();
 
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ClientMessage>();
+    let (out_tx, mut out_rx) = mpsc::channel::<Message>(64);
 
     let writer_task = tokio::spawn(async move {
         let mut writer = writer;
@@ -56,11 +64,19 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
         }
     });
 
-    out_tx.send(ClientMessage::Join {
-        user: user.to_string(),
-        room: room.to_string(),
-        doc: doc.to_string(),
-    })?;
+    let doc_id = format!("{}/{}", room, doc);
+    let raw_user_id = format!("{}-{}", user, unique_suffix());
+    let scoped_user_id = make_scoped_user_id(&doc_id, &raw_user_id);
+    let mut doc_state = TextDoc::new(doc_id.clone(), scoped_user_id.clone());
+    let local_user_id: Option<String> = Some(scoped_user_id.clone());
+
+    out_tx
+        .send(Message::Hello {
+            replica_id: scoped_user_id.clone(),
+            user_name: user.to_string(),
+        })
+        .await?;
+    out_tx.send(encode_sync_request(&doc_id, 0)).await?;
 
     let _term = TerminalGuard::new()?;
 
@@ -86,17 +102,13 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
 
     let mut server_lines = BufReader::new(reader).lines();
 
-    let doc_id = format!("{}/{}", room, doc);
-    let replica_id = format!("{}-{}", user, unique_suffix());
-    let mut doc_state = TextDoc::new(doc_id.clone(), replica_id.clone());
-    let mut local_user_id: Option<usize> = None;
     let mut version = 0u64;
     let mut users_count = 0usize;
     let mut cursor_byte = 0usize;
     let mut scroll = 0usize;
     let mut status_msg = String::new();
-    let mut users: HashMap<usize, String> = HashMap::new();
-    let mut cursors: HashMap<usize, usize> = HashMap::new();
+    let mut users: HashMap<String, String> = HashMap::new();
+    let mut cursors: HashMap<String, usize> = HashMap::new();
 
     render(
         addr,
@@ -110,7 +122,7 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
         &mut scroll,
         &cursors,
         &users,
-        local_user_id,
+        local_user_id.as_deref(),
     )?;
 
     loop {
@@ -137,62 +149,71 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                 if should_exit {
                     // Skip parsing when connection closed or errored.
                 } else {
-                    let msg: ServerMessage = match serde_json::from_str(&line) {
+                    let msg: Message = match serde_json::from_str(&line) {
                         Ok(msg) => msg,
                         Err(_) => continue,
                     };
 
                     match msg {
-                        ServerMessage::Welcome { user_id, text, version: server_version, users: server_users, .. } => {
-                            doc_state = build_doc(&doc_id, &replica_id, &text);
-                            version = server_version;
-                            local_user_id = Some(user_id);
-                            users.clear();
-                            cursors.clear();
-                            for user in server_users {
-                                users.insert(user.id, user.name.clone());
+                        Message::Hello { replica_id, user_name } => {
+                            if doc_id_from_scoped_user_id(&replica_id) == Some(doc_id.as_str()) {
+                                users.insert(replica_id, user_name);
+                                users_count = users.len();
+                                dirty = true;
                             }
-                            users_count = users.len();
-                            cursor_byte = cursor_byte.min(text.len());
-                            status_msg = format!("connected as {}", user_id);
-                            dirty = true;
                         }
-                        ServerMessage::Applied { user_id, op, version: server_version, .. } => {
-                            if Some(user_id) != local_user_id {
-                                match op {
-                                    Op::Cursor { pos } => {
-                                        cursors.insert(user_id, pos);
+                        Message::Update { .. } => {
+                            if let Some((update_doc_id, payload, server_version)) = decode_update(&msg) {
+                                if update_doc_id == doc_id {
+                                    if Some(payload.user_id.clone()) != local_user_id {
+                                        match payload.op {
+                                            Op::Cursor { pos } => {
+                                                cursors.insert(payload.user_id, pos);
+                                            }
+                                            _ => {
+                                                adjust_cursor_for_remote(&payload.op, &mut cursor_byte);
+                                                apply_op_to_doc(&mut doc_state, &payload.op);
+                                            }
+                                        }
                                     }
-                                    _ => {
-                                        adjust_cursor_for_remote(&op, &mut cursor_byte);
-                                        apply_op_to_doc(&mut doc_state, &op);
-                                    }
+                                    version = server_version;
+                                    cursor_byte = cursor_byte.min(doc_state.get_text().len());
+                                    dirty = true;
                                 }
                             }
-                            version = server_version;
-                            cursor_byte = cursor_byte.min(doc_state.get_text().len());
-                            dirty = true;
                         }
-                        ServerMessage::Presence { users: server_users, .. } => {
-                            users.clear();
-                            for user in server_users {
-                                users.insert(user.id, user.name.clone());
+                        Message::Presence { user_id, document_id, cursor_pos } => {
+                            if document_id == doc_id {
+                                match cursor_pos {
+                                    Some(pos) => {
+                                        cursors.insert(user_id, pos);
+                                    }
+                                    None => {
+                                        users.remove(&user_id);
+                                        cursors.remove(&user_id);
+                                    }
+                                }
+                                users_count = users.len();
+                                dirty = true;
                             }
-                            users_count = users.len();
-                            cursors.retain(|id, _| users.contains_key(id));
-                            dirty = true;
                         }
-                        ServerMessage::SyncResponse { text, version: server_version, .. } => {
-                            doc_state = build_doc(&doc_id, &replica_id, &text);
-                            version = server_version;
-                            cursor_byte = cursor_byte.min(text.len());
-                            status_msg = "sync complete".to_string();
-                            dirty = true;
+                        Message::SyncResponse { .. } => {
+                            if let Some((sync_doc_id, payload, server_version)) = decode_sync_response(&msg) {
+                                if sync_doc_id == doc_id {
+                                    doc_state = build_doc(&doc_id, &scoped_user_id, &payload.text);
+                                    version = server_version;
+                                    cursor_byte = cursor_byte.min(payload.text.len());
+                                    users.clear();
+                                    for user in payload.users {
+                                        users.insert(user.id, user.name);
+                                    }
+                                    users_count = users.len();
+                                    status_msg = "sync complete".to_string();
+                                    dirty = true;
+                                }
+                            }
                         }
-                        ServerMessage::Error { message } => {
-                            status_msg = message;
-                            dirty = true;
-                        }
+                        Message::Ack { .. } | Message::Ping | Message::Pong | Message::SyncRequest { .. } => {}
                     }
                 }
             }
@@ -208,6 +229,9 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                             &mut doc_state,
                             &mut cursor_byte,
                             &out_tx,
+                            &doc_id,
+                            local_user_id.as_deref(),
+                            version,
                             &mut status_msg,
                         ) {
                             dirty = true;
@@ -236,7 +260,7 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                 &mut scroll,
                 &cursors,
                 &users,
-                local_user_id,
+                local_user_id.as_deref(),
             )?;
         }
 
@@ -253,7 +277,10 @@ fn handle_key(
     key: KeyEvent,
     doc_state: &mut TextDoc,
     cursor_byte: &mut usize,
-    out_tx: &mpsc::UnboundedSender<ClientMessage>,
+    out_tx: &mpsc::Sender<Message>,
+    doc_id: &str,
+    local_user_id: Option<&str>,
+    version: u64,
     status_msg: &mut String,
 ) -> bool {
     if key.code == KeyCode::Esc {
@@ -268,32 +295,62 @@ fn handle_key(
     match key.code {
         KeyCode::Left => {
             *cursor_byte = prev_char_boundary(&text, *cursor_byte);
-            let _ = out_tx.send(ClientMessage::Cursor { pos: *cursor_byte });
+            let _ = out_tx.try_send(encode_update(
+                doc_id,
+                local_user_id.unwrap_or(""),
+                Op::Cursor { pos: *cursor_byte },
+                version,
+            ));
             true
         }
         KeyCode::Right => {
             *cursor_byte = next_char_boundary(&text, *cursor_byte);
-            let _ = out_tx.send(ClientMessage::Cursor { pos: *cursor_byte });
+            let _ = out_tx.try_send(encode_update(
+                doc_id,
+                local_user_id.unwrap_or(""),
+                Op::Cursor { pos: *cursor_byte },
+                version,
+            ));
             true
         }
         KeyCode::Up => {
             *cursor_byte = move_cursor_vertical(&text, *cursor_byte, -1);
-            let _ = out_tx.send(ClientMessage::Cursor { pos: *cursor_byte });
+            let _ = out_tx.try_send(encode_update(
+                doc_id,
+                local_user_id.unwrap_or(""),
+                Op::Cursor { pos: *cursor_byte },
+                version,
+            ));
             true
         }
         KeyCode::Down => {
             *cursor_byte = move_cursor_vertical(&text, *cursor_byte, 1);
-            let _ = out_tx.send(ClientMessage::Cursor { pos: *cursor_byte });
+            let _ = out_tx.try_send(encode_update(
+                doc_id,
+                local_user_id.unwrap_or(""),
+                Op::Cursor { pos: *cursor_byte },
+                version,
+            ));
             true
         }
         KeyCode::Home => {
             *cursor_byte = line_start(&text, *cursor_byte);
-            let _ = out_tx.send(ClientMessage::Cursor { pos: *cursor_byte });
+            let _ = out_tx.try_send(encode_update(
+                doc_id,
+                local_user_id.unwrap_or(""),
+                Op::Cursor { pos: *cursor_byte },
+                version,
+            ));
             true
         }
         KeyCode::End => {
             *cursor_byte = line_end(&text, *cursor_byte);
-            let _ = out_tx.send(ClientMessage::Cursor { pos: *cursor_byte });
+            let _ = out_tx.try_send(encode_update(
+                doc_id,
+                local_user_id.unwrap_or(""),
+                Op::Cursor { pos: *cursor_byte },
+                version,
+            ));
             true
         }
         KeyCode::Backspace => {
@@ -302,8 +359,18 @@ fn handle_key(
                 let len = *cursor_byte - start;
                 apply_delete(doc_state, start, len);
                 *cursor_byte = start;
-                let _ = out_tx.send(ClientMessage::Delete { pos: start, len });
-                let _ = out_tx.send(ClientMessage::Cursor { pos: *cursor_byte });
+                let _ = out_tx.try_send(encode_update(
+                    doc_id,
+                    local_user_id.unwrap_or(""),
+                    Op::Delete { pos: start, len },
+                    version,
+                ));
+                let _ = out_tx.try_send(encode_update(
+                    doc_id,
+                    local_user_id.unwrap_or(""),
+                    Op::Cursor { pos: *cursor_byte },
+                    version,
+                ));
             }
             true
         }
@@ -313,11 +380,18 @@ fn handle_key(
                 let len = end - *cursor_byte;
                 if len > 0 {
                     apply_delete(doc_state, *cursor_byte, len);
-                    let _ = out_tx.send(ClientMessage::Delete {
-                        pos: *cursor_byte,
-                        len,
-                    });
-                    let _ = out_tx.send(ClientMessage::Cursor { pos: *cursor_byte });
+                    let _ = out_tx.try_send(encode_update(
+                        doc_id,
+                        local_user_id.unwrap_or(""),
+                        Op::Delete { pos: *cursor_byte, len },
+                        version,
+                    ));
+                    let _ = out_tx.try_send(encode_update(
+                        doc_id,
+                        local_user_id.unwrap_or(""),
+                        Op::Cursor { pos: *cursor_byte },
+                        version,
+                    ));
                 }
             }
             true
@@ -325,16 +399,23 @@ fn handle_key(
         KeyCode::Enter => {
             let insert = "\n".to_string();
             apply_insert(doc_state, *cursor_byte, &insert);
-            let _ = out_tx.send(ClientMessage::Insert {
-                pos: *cursor_byte,
-                text: insert,
-            });
+            let _ = out_tx.try_send(encode_update(
+                doc_id,
+                local_user_id.unwrap_or(""),
+                Op::Insert { pos: *cursor_byte, text: insert },
+                version,
+            ));
             *cursor_byte += 1;
-            let _ = out_tx.send(ClientMessage::Cursor { pos: *cursor_byte });
+            let _ = out_tx.try_send(encode_update(
+                doc_id,
+                local_user_id.unwrap_or(""),
+                Op::Cursor { pos: *cursor_byte },
+                version,
+            ));
             true
         }
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let _ = out_tx.send(ClientMessage::SyncRequest);
+            let _ = out_tx.try_send(encode_sync_request(doc_id, version));
             status_msg.clear();
             status_msg.push_str("sync requested");
             true
@@ -346,12 +427,19 @@ fn handle_key(
             let insert = ch.to_string();
             let insert_len = insert.len();
             apply_insert(doc_state, *cursor_byte, &insert);
-            let _ = out_tx.send(ClientMessage::Insert {
-                pos: *cursor_byte,
-                text: insert,
-            });
+            let _ = out_tx.try_send(encode_update(
+                doc_id,
+                local_user_id.unwrap_or(""),
+                Op::Insert { pos: *cursor_byte, text: insert },
+                version,
+            ));
             *cursor_byte += insert_len;
-            let _ = out_tx.send(ClientMessage::Cursor { pos: *cursor_byte });
+            let _ = out_tx.try_send(encode_update(
+                doc_id,
+                local_user_id.unwrap_or(""),
+                Op::Cursor { pos: *cursor_byte },
+                version,
+            ));
             true
         }
         _ => false,
@@ -368,9 +456,9 @@ fn render(
     version: u64,
     status_msg: &str,
     scroll: &mut usize,
-    cursors: &HashMap<usize, usize>,
-    users: &HashMap<usize, String>,
-    local_user_id: Option<usize>,
+    cursors: &HashMap<String, usize>,
+    users: &HashMap<String, String>,
+    local_user_id: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     let mut out = stdout();
     let (cols, rows) = terminal::size()?;
@@ -647,11 +735,11 @@ fn render_remote_cursors(
     scroll: &usize,
     content_height: usize,
     cols: usize,
-    cursors: &HashMap<usize, usize>,
-    local_user_id: Option<usize>,
+    cursors: &HashMap<String, usize>,
+    local_user_id: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     for (user_id, pos) in cursors {
-        if Some(*user_id) == local_user_id {
+        if Some(user_id.as_str()) == local_user_id {
             continue;
         }
         let (line, col) = cursor_line_col(text, *pos);
@@ -661,7 +749,7 @@ fn render_remote_cursors(
         let row = (line - *scroll) as u16;
         let col = col.min(cols.saturating_sub(1)) as u16;
         let cell = char_at(text, *pos).unwrap_or(' ');
-        let color = color_for_user(*user_id);
+        let color = color_for_user(user_id);
         queue!(out, MoveTo(col, row), SetBackgroundColor(color), SetForegroundColor(Color::Black))?;
         out.write_all(cell.to_string().as_bytes())?;
         queue!(out, SetAttribute(Attribute::Reset))?;
@@ -691,20 +779,20 @@ fn render_local_cursor(
 }
 
 fn build_cursor_summary(
-    cursors: &HashMap<usize, usize>,
-    users: &HashMap<usize, String>,
-    local_user_id: Option<usize>,
+    cursors: &HashMap<String, usize>,
+    users: &HashMap<String, String>,
+    local_user_id: Option<&str>,
     limit: usize,
 ) -> String {
-    let mut entries: Vec<(usize, usize, String)> = cursors
+    let mut entries: Vec<(String, usize, String)> = cursors
         .iter()
-        .filter(|(id, _)| Some(**id) != local_user_id)
+        .filter(|(id, _)| Some(id.as_str()) != local_user_id)
         .map(|(id, pos)| {
-            let name = users.get(id).cloned().unwrap_or_else(|| format!("user{}", id));
-            (*id, *pos, name)
+            let name = users.get(id).cloned().unwrap_or_else(|| id.clone());
+            (id.clone(), *pos, name)
         })
         .collect();
-    entries.sort_by_key(|(id, _, _)| *id);
+    entries.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
 
     let mut parts = Vec::new();
     for (_, pos, name) in entries.into_iter().take(limit) {
@@ -718,7 +806,7 @@ fn build_cursor_summary(
     format!("cursors: {}", parts.join(", "))
 }
 
-fn color_for_user(user_id: usize) -> Color {
+fn color_for_user(user_id: &str) -> Color {
     const PALETTE: [Color; 6] = [
         Color::Cyan,
         Color::Magenta,
@@ -727,7 +815,12 @@ fn color_for_user(user_id: usize) -> Color {
         Color::Blue,
         Color::Red,
     ];
-    PALETTE[user_id % PALETTE.len()]
+    let mut hash = 0u64;
+    for byte in user_id.as_bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(*byte as u64);
+    }
+    let idx = (hash as usize) % PALETTE.len();
+    PALETTE[idx]
 }
 
 fn char_at(text: &str, pos: usize) -> Option<char> {
