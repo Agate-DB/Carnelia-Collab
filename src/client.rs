@@ -2,7 +2,7 @@ use crate::protocol::{
     Op, decode_sync_response, decode_update, doc_id_from_scoped_user_id, encode_sync_request,
     encode_update, make_scoped_user_id,
 };
-use mdcs_sdk::{Awareness, CollaborativeDoc, Message, TextDoc};
+use mdcs_sdk::{Awareness, Message, TextDoc};
 use std::collections::HashMap;
 use std::error::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -132,18 +132,25 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                         }
                     } else {
                         apply_local_op(&mut doc_state, &op);
-                        let deltas = doc_state.take_pending_deltas();
-                        let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
+                        let combined_delta = Vec::new();
                         let msg = encode_update(
                             &doc_id,
                             local_user_id.as_deref().unwrap_or(""),
                             op,
-                            delta,
+                            combined_delta,
                             version,
                         );
-                        if out_tx.send(msg).await.is_err() {
-                            println!("[client] failed to send message");
-                            break;
+                        match msg {
+                            Ok(msg) => {
+                                if out_tx.send(msg).await.is_err() {
+                                    println!("[client] failed to send message");
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                println!("[client] failed to encode update: {}", err);
+                                break;
+                            }
                         }
                     }
                 } else if !input.trim().is_empty() {
@@ -185,9 +192,8 @@ fn apply_server_message(msg: &Message, ctx: &mut ClientContext<'_>) {
                     return;
                 }
                 if Some(payload.user_id.clone()) != *ctx.local_user_id {
-                    if !payload.delta.is_empty() {
-                        ctx.doc_state.apply_remote(&payload.delta);
-                    }
+                    // Treat `op` as the single source of truth for remote edits.
+                    // Ignore `payload.delta` to avoid double-applying changes.
                     apply_op_to_doc(ctx.doc_state, &payload.op);
                 }
                 *ctx.version = server_version;

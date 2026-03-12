@@ -33,18 +33,18 @@ pub fn encode_update(
     op: Op,
     delta: Vec<u8>,
     version: u64,
-) -> Message {
+) -> Result<Message, serde_json::Error> {
     let payload = WireUpdate {
         user_id: user_id.to_string(),
         op,
         delta,
     };
-    let delta = serde_json::to_vec(&payload).unwrap_or_default();
-    Message::Update {
+    let delta = serde_json::to_vec(&payload)?;
+    Ok(Message::Update {
         document_id: document_id.to_string(),
         delta,
         version,
-    }
+    })
 }
 
 pub fn decode_update(msg: &Message) -> Option<(String, WireUpdate, u64)> {
@@ -73,17 +73,17 @@ pub fn encode_sync_response(
     text: &str,
     users: Vec<WireUser>,
     version: u64,
-) -> Message {
+) -> Result<Message, serde_json::Error> {
     let payload = WireSync {
         text: text.to_string(),
         users,
     };
-    let delta = serde_json::to_vec(&payload).unwrap_or_default();
-    Message::SyncResponse {
+    let delta = serde_json::to_vec(&payload)?;
+    Ok(Message::SyncResponse {
         document_id: document_id.to_string(),
         deltas: vec![delta],
         version,
-    }
+    })
 }
 
 pub fn decode_sync_response(msg: &Message) -> Option<(String, WireSync, u64)> {
@@ -124,7 +124,8 @@ mod tests {
             },
             vec![1, 2, 3],
             5,
-        );
+        )
+        .expect("encode");
         let (doc_id, payload, version) = decode_update(&msg).expect("decode");
         assert_eq!(doc_id, "room/doc.txt");
         assert_eq!(version, 5);
@@ -145,7 +146,8 @@ mod tests {
             id: "room/doc.txt|user-1".to_string(),
             name: "Alice".to_string(),
         }];
-        let msg = encode_sync_response("room/doc.txt", "hello", users, 2);
+        let msg = encode_sync_response("room/doc.txt", "hello", users, 2)
+            .expect("encode");
         let (doc_id, payload, version) = decode_sync_response(&msg).expect("decode");
         assert_eq!(doc_id, "room/doc.txt");
         assert_eq!(version, 2);

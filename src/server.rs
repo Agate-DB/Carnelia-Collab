@@ -162,6 +162,16 @@ async fn handle_connection(
                             continue;
                         }
 
+                        if doc_id_from_scoped_user_id(current_user_id.as_deref().unwrap())
+                            != Some(document_id.as_str())
+                        {
+                            println!(
+                                "[server] replica_id not scoped to document: {}",
+                                document_id
+                            );
+                            continue;
+                        }
+
                         let (room, doc) = split_doc_id(&document_id);
                         current_room = Some(room.clone());
                         current_doc = Some(doc.clone());
@@ -198,8 +208,14 @@ async fn handle_connection(
                         guard.users.insert(user_id.clone(), user_state);
 
                         let users = users_in_doc(&guard.users, &room, &doc);
-                        let sync = encode_sync_response(&document_id, &doc_text, users, doc_version);
-                        let _ = out_tx.send(sync).await;
+                        match encode_sync_response(&document_id, &doc_text, users, doc_version) {
+                            Ok(sync) => {
+                                let _ = out_tx.send(sync).await;
+                            }
+                            Err(err) => {
+                                println!("[server] failed to encode sync response: {}", err);
+                            }
+                        }
                         drop(guard);
 
                         let _ = broadcast_tx.send(Message::Hello {
@@ -223,9 +239,18 @@ async fn handle_connection(
                         document_id,
                         cursor_pos,
                     } => {
-                        if let (Some(room), Some(doc)) = (current_room.as_deref(), current_doc.as_deref())
-                            && document_id == doc_key(room, doc)
-                        {
+                        if let (Some(current_id), Some(room), Some(doc)) = (
+                            current_user_id.as_deref(),
+                            current_room.as_deref(),
+                            current_doc.as_deref(),
+                        ) {
+                            if user_id != current_id {
+                                println!("[server] ignoring spoofed presence for {}", user_id);
+                                continue;
+                            }
+                            if document_id != doc_key(room, doc) {
+                                continue;
+                            }
                             let mut guard = state.lock().await;
                             if let Some(doc_state) = guard.docs.get_mut(&document_id) {
                                 match cursor_pos {
@@ -297,6 +322,12 @@ async fn handle_update(
     let Some((document_id, payload, _)) = decode_update(msg) else {
         return;
     };
+    if let Some(current_id) = current_user_id {
+        if payload.user_id != current_id {
+            println!("[server] ignoring spoofed update for {}", payload.user_id);
+            return;
+        }
+    }
     if document_id != doc_key(room, doc) {
         return;
     }
@@ -322,12 +353,7 @@ async fn handle_update(
     let (updated_text, version, op, delta) = {
         let doc_state = guard.docs.get_mut(&doc_key).expect("doc exists");
         apply_op_to_doc(doc_state, &payload.user_id, &payload.op);
-        let deltas = doc_state.doc.take_pending_deltas();
-        let delta = if deltas.len() == 1 {
-            deltas[0].clone()
-        } else {
-            Vec::new()
-        };
+        let delta = Vec::new();
         doc_state.version += 1;
         (
             doc_state.doc.get_text(),
@@ -349,8 +375,14 @@ async fn handle_update(
             });
         }
         _ => {
-            let update = encode_update(&doc_key, &payload.user_id, op, delta, version);
-            let _ = broadcast_tx.send(update);
+            match encode_update(&doc_key, &payload.user_id, op, delta, version) {
+                Ok(update) => {
+                    let _ = broadcast_tx.send(update);
+                }
+                Err(err) => {
+                    println!("[server] failed to encode update: {}", err);
+                }
+            }
         }
     }
 }

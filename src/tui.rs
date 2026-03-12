@@ -164,11 +164,10 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                                 && update_doc_id == doc_id
                             {
                                 if Some(payload.user_id.clone()) != local_user_id {
-                                    if !payload.delta.is_empty() {
-                                        doc_state.apply_remote(&payload.delta);
-                                    }
-                                    adjust_cursor_for_remote(&payload.op, &mut cursor_byte);
+                                    // Treat `op` as the single source of truth for remote edits.
+                                    // Ignore `payload.delta` to avoid double-applying changes.
                                     apply_op_to_doc(&mut doc_state, &payload.op);
+                                    adjust_cursor_for_remote(&payload.op, &mut cursor_byte);
                                 }
                                 version = server_version;
                                 cursor_byte = cursor_byte.min(doc_state.get_text().len());
@@ -356,19 +355,16 @@ fn handle_key(key: KeyEvent, ctx: &mut KeyContext<'_>) -> bool {
                 let len = *ctx.cursor_byte - start;
                 apply_delete(ctx.doc_state, start, len);
                 *ctx.cursor_byte = start;
-                let deltas = ctx.doc_state.take_pending_deltas();
-                let delta = if deltas.len() == 1 {
-                    deltas[0].clone()
-                } else {
-                    Vec::new()
-                };
-                let _ = ctx.out_tx.try_send(encode_update(
+                let delta = Vec::new();
+                if let Ok(msg) = encode_update(
                     ctx.doc_id,
                     ctx.local_user_id.unwrap_or(""),
                     Op::Delete { pos: start, len },
                     delta,
                     ctx.version,
-                ));
+                ) {
+                    let _ = ctx.out_tx.try_send(msg);
+                }
                 ctx.awareness.set_cursor(ctx.doc_id, *ctx.cursor_byte);
                 let _ = ctx.out_tx.try_send(Message::Presence {
                     user_id: ctx.local_user_id.unwrap_or("").to_string(),
@@ -384,13 +380,8 @@ fn handle_key(key: KeyEvent, ctx: &mut KeyContext<'_>) -> bool {
                 let len = end - *ctx.cursor_byte;
                 if len > 0 {
                     apply_delete(ctx.doc_state, *ctx.cursor_byte, len);
-                    let deltas = ctx.doc_state.take_pending_deltas();
-                    let delta = if deltas.len() == 1 {
-                        deltas[0].clone()
-                    } else {
-                        Vec::new()
-                    };
-                    let _ = ctx.out_tx.try_send(encode_update(
+                    let delta = Vec::new();
+                    if let Ok(msg) = encode_update(
                         ctx.doc_id,
                         ctx.local_user_id.unwrap_or(""),
                         Op::Delete {
@@ -399,7 +390,9 @@ fn handle_key(key: KeyEvent, ctx: &mut KeyContext<'_>) -> bool {
                         },
                         delta,
                         ctx.version,
-                    ));
+                    ) {
+                        let _ = ctx.out_tx.try_send(msg);
+                    }
                     ctx.awareness.set_cursor(ctx.doc_id, *ctx.cursor_byte);
                     let _ = ctx.out_tx.try_send(Message::Presence {
                         user_id: ctx.local_user_id.unwrap_or("").to_string(),
@@ -413,13 +406,8 @@ fn handle_key(key: KeyEvent, ctx: &mut KeyContext<'_>) -> bool {
         KeyCode::Enter => {
             let insert = "\n".to_string();
             apply_insert(ctx.doc_state, *ctx.cursor_byte, &insert);
-            let deltas = ctx.doc_state.take_pending_deltas();
-            let delta = if deltas.len() == 1 {
-                deltas[0].clone()
-            } else {
-                Vec::new()
-            };
-            let _ = ctx.out_tx.try_send(encode_update(
+            let delta = Vec::new();
+            if let Ok(msg) = encode_update(
                 ctx.doc_id,
                 ctx.local_user_id.unwrap_or(""),
                 Op::Insert {
@@ -428,7 +416,9 @@ fn handle_key(key: KeyEvent, ctx: &mut KeyContext<'_>) -> bool {
                 },
                 delta,
                 ctx.version,
-            ));
+            ) {
+                let _ = ctx.out_tx.try_send(msg);
+            }
             *ctx.cursor_byte += 1;
             ctx.awareness.set_cursor(ctx.doc_id, *ctx.cursor_byte);
             let _ = ctx.out_tx.try_send(Message::Presence {
@@ -453,13 +443,8 @@ fn handle_key(key: KeyEvent, ctx: &mut KeyContext<'_>) -> bool {
             let insert = ch.to_string();
             let insert_len = insert.len();
             apply_insert(ctx.doc_state, *ctx.cursor_byte, &insert);
-            let deltas = ctx.doc_state.take_pending_deltas();
-            let delta = if deltas.len() == 1 {
-                deltas[0].clone()
-            } else {
-                Vec::new()
-            };
-            let _ = ctx.out_tx.try_send(encode_update(
+            let delta = Vec::new();
+            if let Ok(msg) = encode_update(
                 ctx.doc_id,
                 ctx.local_user_id.unwrap_or(""),
                 Op::Insert {
@@ -468,7 +453,9 @@ fn handle_key(key: KeyEvent, ctx: &mut KeyContext<'_>) -> bool {
                 },
                 delta,
                 ctx.version,
-            ));
+            ) {
+                let _ = ctx.out_tx.try_send(msg);
+            }
             *ctx.cursor_byte += insert_len;
             ctx.awareness.set_cursor(ctx.doc_id, *ctx.cursor_byte);
             let _ = ctx.out_tx.try_send(Message::Presence {
