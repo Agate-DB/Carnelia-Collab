@@ -146,8 +146,7 @@ mod tests {
             id: "room/doc.txt|user-1".to_string(),
             name: "Alice".to_string(),
         }];
-        let msg = encode_sync_response("room/doc.txt", "hello", users, 2)
-            .expect("encode");
+        let msg = encode_sync_response("room/doc.txt", "hello", users, 2).expect("encode");
         let (doc_id, payload, version) = decode_sync_response(&msg).expect("decode");
         assert_eq!(doc_id, "room/doc.txt");
         assert_eq!(version, 2);

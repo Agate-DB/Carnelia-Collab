@@ -2,7 +2,7 @@ use crate::protocol::{
     Op, WireUser, decode_update, doc_id_from_scoped_user_id, encode_sync_response, encode_update,
 };
 use crate::storage::Storage;
-use mdcs_sdk::{CollaborativeDoc, Message, TextDoc};
+use mdcs_sdk::{Message, TextDoc};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
@@ -322,11 +322,12 @@ async fn handle_update(
     let Some((document_id, payload, _)) = decode_update(msg) else {
         return;
     };
-    if let Some(current_id) = current_user_id {
-        if payload.user_id != current_id {
+    match current_user_id {
+        Some(current_id) if payload.user_id != current_id => {
             println!("[server] ignoring spoofed update for {}", payload.user_id);
             return;
         }
+        _ => {}
     }
     if document_id != doc_key(room, doc) {
         return;
@@ -374,16 +375,14 @@ async fn handle_update(
                 cursor_pos: Some(pos),
             });
         }
-        _ => {
-            match encode_update(&doc_key, &payload.user_id, op, delta, version) {
-                Ok(update) => {
-                    let _ = broadcast_tx.send(update);
-                }
-                Err(err) => {
-                    println!("[server] failed to encode update: {}", err);
-                }
+        _ => match encode_update(&doc_key, &payload.user_id, op, delta, version) {
+            Ok(update) => {
+                let _ = broadcast_tx.send(update);
             }
-        }
+            Err(err) => {
+                println!("[server] failed to encode update: {}", err);
+            }
+        },
     }
 }
 

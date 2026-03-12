@@ -7,7 +7,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use crossterm::style::{Attribute, Color, SetAttribute, SetBackgroundColor, SetForegroundColor};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
-use mdcs_sdk::{Awareness, CollaborativeDoc, Message, TextDoc};
+use mdcs_sdk::{Awareness, Message, TextDoc};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{Write, stdout};
