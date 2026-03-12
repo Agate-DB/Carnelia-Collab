@@ -7,7 +7,7 @@ use crate::protocol::{
     make_scoped_user_id,
     Op,
 };
-use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::cursor::{MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
@@ -30,7 +30,7 @@ struct TerminalGuard;
 impl TerminalGuard {
     fn new() -> Result<Self, Box<dyn Error>> {
         terminal::enable_raw_mode()?;
-        execute!(stdout(), EnterAlternateScreen, Hide)?;
+        execute!(stdout(), EnterAlternateScreen)?;
         Ok(Self)
     }
 }
@@ -759,7 +759,7 @@ fn render_remote_cursors(
         }
         let row = (line - *scroll) as u16;
         let col = col.min(cols.saturating_sub(1)) as u16;
-        let cell = char_at(text, *pos).unwrap_or(' ');
+        let cell = cursor_cell_char(text, *pos);
         let color = color_for_user(user_id);
         queue!(out, MoveTo(col, row), SetBackgroundColor(color), SetForegroundColor(Color::Black))?;
         out.write_all(cell.to_string().as_bytes())?;
@@ -782,7 +782,7 @@ fn render_local_cursor(
     }
     let row = (line - *scroll) as u16;
     let col = col.min(cols.saturating_sub(1)) as u16;
-    let cell = char_at(text, cursor_byte).unwrap_or(' ');
+    let cell = cursor_cell_char(text, cursor_byte);
     queue!(out, MoveTo(col, row), SetBackgroundColor(Color::White), SetForegroundColor(Color::Black))?;
     out.write_all(cell.to_string().as_bytes())?;
     queue!(out, SetAttribute(Attribute::Reset))?;
@@ -840,4 +840,11 @@ fn char_at(text: &str, pos: usize) -> Option<char> {
         return None;
     }
     text[pos..].chars().next()
+}
+
+fn cursor_cell_char(text: &str, pos: usize) -> char {
+    match char_at(text, pos) {
+        Some('\n') | None => ' ',
+        Some(ch) => ch,
+    }
 }
