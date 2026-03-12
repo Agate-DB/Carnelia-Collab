@@ -1,11 +1,6 @@
 use crate::protocol::{
-    decode_sync_response,
-    decode_update,
-    doc_id_from_scoped_user_id,
-    encode_sync_request,
-    encode_update,
-    make_scoped_user_id,
-    Op,
+    Op, decode_sync_response, decode_update, doc_id_from_scoped_user_id, encode_sync_request,
+    encode_update, make_scoped_user_id,
 };
 use mdcs_sdk::{Awareness, CollaborativeDoc, Message, TextDoc};
 use std::collections::HashMap;
@@ -51,9 +46,7 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
             user_name: user.to_string(),
         })
         .await?;
-    out_tx
-        .send(encode_sync_request(&doc_id, 0))
-        .await?;
+    out_tx.send(encode_sync_request(&doc_id, 0)).await?;
 
     println!("[client] joined room '{}' doc '{}'", room, doc);
     println!("[client] type /help for commands");
@@ -234,10 +227,7 @@ fn apply_server_message(
                 print_document(&doc_state.get_text());
             }
         }
-        Message::Ack { .. }
-        | Message::Ping
-        | Message::Pong
-        | Message::SyncRequest { .. } => {}
+        Message::Ack { .. } | Message::Ping | Message::Pong | Message::SyncRequest { .. } => {}
     }
 }
 

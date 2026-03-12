@@ -1,10 +1,5 @@
 use crate::protocol::{
-    decode_update,
-    doc_id_from_scoped_user_id,
-    encode_sync_response,
-    encode_update,
-    Op,
-    WireUser,
+    Op, WireUser, decode_update, doc_id_from_scoped_user_id, encode_sync_response, encode_update,
 };
 use crate::storage::Storage;
 use mdcs_sdk::{CollaborativeDoc, Message, TextDoc};
@@ -13,7 +8,7 @@ use std::error::Error;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc};
 
 struct DocState {
     doc: TextDoc,
@@ -292,10 +287,16 @@ async fn handle_update(
     if current_user_id.is_none() {
         return;
     }
-    let Some(room) = room else { return; };
-    let Some(doc) = doc else { return; };
+    let Some(room) = room else {
+        return;
+    };
+    let Some(doc) = doc else {
+        return;
+    };
 
-    let Some((document_id, payload, _)) = decode_update(msg) else { return; };
+    let Some((document_id, payload, _)) = decode_update(msg) else {
+        return;
+    };
     if document_id != doc_key(room, doc) {
         return;
     }
@@ -322,9 +323,18 @@ async fn handle_update(
         let doc_state = guard.docs.get_mut(&doc_key).expect("doc exists");
         apply_op_to_doc(doc_state, &payload.user_id, &payload.op);
         let deltas = doc_state.doc.take_pending_deltas();
-        let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
+        let delta = if deltas.len() == 1 {
+            deltas[0].clone()
+        } else {
+            Vec::new()
+        };
         doc_state.version += 1;
-        (doc_state.doc.get_text(), doc_state.version, payload.op, delta)
+        (
+            doc_state.doc.get_text(),
+            doc_state.version,
+            payload.op,
+            delta,
+        )
     };
 
     let _ = guard.storage.save_text(room, doc, &updated_text);
@@ -346,11 +356,17 @@ async fn handle_update(
 }
 
 fn should_forward(msg: &Message, room: Option<&str>, doc: Option<&str>) -> bool {
-    let Some(room) = room else { return false; };
-    let Some(doc) = doc else { return false; };
+    let Some(room) = room else {
+        return false;
+    };
+    let Some(doc) = doc else {
+        return false;
+    };
     let doc_id = doc_key(room, doc);
     match msg {
-        Message::Hello { replica_id, .. } => doc_id_from_scoped_user_id(replica_id) == Some(doc_id.as_str()),
+        Message::Hello { replica_id, .. } => {
+            doc_id_from_scoped_user_id(replica_id) == Some(doc_id.as_str())
+        }
         Message::Update { document_id, .. } => document_id == &doc_id,
         Message::Presence { document_id, .. } => document_id == &doc_id,
         Message::SyncResponse { document_id, .. } => document_id == &doc_id,

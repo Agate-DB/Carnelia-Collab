@@ -7,7 +7,11 @@ mod tui;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "collab-cli", version, about = "Barebones collaborative text backend (TCP)")]
+#[command(
+    name = "collab-cli",
+    version,
+    about = "Barebones collaborative text backend (TCP)"
+)]
 struct Args {
     #[command(subcommand)]
     command: Command,

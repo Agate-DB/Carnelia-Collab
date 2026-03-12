@@ -68,7 +68,12 @@ pub fn encode_sync_request(document_id: &str, version: u64) -> Message {
     }
 }
 
-pub fn encode_sync_response(document_id: &str, text: &str, users: Vec<WireUser>, version: u64) -> Message {
+pub fn encode_sync_response(
+    document_id: &str,
+    text: &str,
+    users: Vec<WireUser>,
+    version: u64,
+) -> Message {
     let payload = WireSync {
         text: text.to_string(),
         users,

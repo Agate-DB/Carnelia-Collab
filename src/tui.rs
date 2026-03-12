@@ -1,21 +1,16 @@
 use crate::protocol::{
-    decode_sync_response,
-    decode_update,
-    doc_id_from_scoped_user_id,
-    encode_sync_request,
-    encode_update,
-    make_scoped_user_id,
-    Op,
+    Op, decode_sync_response, decode_update, doc_id_from_scoped_user_id, encode_sync_request,
+    encode_update, make_scoped_user_id,
 };
 use crossterm::cursor::{MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::style::{Attribute, Color, SetAttribute, SetBackgroundColor, SetForegroundColor};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
-use crossterm::style::{Attribute, Color, SetAttribute, SetBackgroundColor, SetForegroundColor};
 use mdcs_sdk::{Awareness, CollaborativeDoc, Message, TextDoc};
 use std::collections::HashMap;
 use std::error::Error;
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -359,7 +354,11 @@ fn handle_key(
                 apply_delete(doc_state, start, len);
                 *cursor_byte = start;
                 let deltas = doc_state.take_pending_deltas();
-                let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
+                let delta = if deltas.len() == 1 {
+                    deltas[0].clone()
+                } else {
+                    Vec::new()
+                };
                 let _ = out_tx.try_send(encode_update(
                     doc_id,
                     local_user_id.unwrap_or(""),
@@ -383,11 +382,18 @@ fn handle_key(
                 if len > 0 {
                     apply_delete(doc_state, *cursor_byte, len);
                     let deltas = doc_state.take_pending_deltas();
-                    let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
+                    let delta = if deltas.len() == 1 {
+                        deltas[0].clone()
+                    } else {
+                        Vec::new()
+                    };
                     let _ = out_tx.try_send(encode_update(
                         doc_id,
                         local_user_id.unwrap_or(""),
-                        Op::Delete { pos: *cursor_byte, len },
+                        Op::Delete {
+                            pos: *cursor_byte,
+                            len,
+                        },
                         delta,
                         version,
                     ));
@@ -405,11 +411,18 @@ fn handle_key(
             let insert = "\n".to_string();
             apply_insert(doc_state, *cursor_byte, &insert);
             let deltas = doc_state.take_pending_deltas();
-            let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
+            let delta = if deltas.len() == 1 {
+                deltas[0].clone()
+            } else {
+                Vec::new()
+            };
             let _ = out_tx.try_send(encode_update(
                 doc_id,
                 local_user_id.unwrap_or(""),
-                Op::Insert { pos: *cursor_byte, text: insert },
+                Op::Insert {
+                    pos: *cursor_byte,
+                    text: insert,
+                },
                 delta,
                 version,
             ));
@@ -436,11 +449,18 @@ fn handle_key(
             let insert_len = insert.len();
             apply_insert(doc_state, *cursor_byte, &insert);
             let deltas = doc_state.take_pending_deltas();
-            let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
+            let delta = if deltas.len() == 1 {
+                deltas[0].clone()
+            } else {
+                Vec::new()
+            };
             let _ = out_tx.try_send(encode_update(
                 doc_id,
                 local_user_id.unwrap_or(""),
-                Op::Insert { pos: *cursor_byte, text: insert },
+                Op::Insert {
+                    pos: *cursor_byte,
+                    text: insert,
+                },
                 delta,
                 version,
             ));
@@ -522,7 +542,11 @@ fn render(
         users_count,
         version,
         cursor_byte,
-        if cursor_summary.is_empty() { "cursors: -" } else { &cursor_summary },
+        if cursor_summary.is_empty() {
+            "cursors: -"
+        } else {
+            &cursor_summary
+        },
         if status_msg.is_empty() { "" } else { "|" }
     );
     let status_line = if status_msg.is_empty() {
@@ -608,21 +632,21 @@ fn line_end(text: &str, cursor_byte: usize) -> usize {
     let starts = line_start_positions(text);
     let (line_idx, _) = cursor_line_col(text, cursor_byte);
     let (start, end) = line_range(text, &starts, line_idx);
-    if end < start {
-        start
-    } else {
-        end
-    }
+    if end < start { start } else { end }
 }
 
 fn move_cursor_vertical(text: &str, cursor_byte: usize, direction: i32) -> usize {
     let starts = line_start_positions(text);
     let (line_idx, col) = cursor_line_col(text, cursor_byte);
     let target_line = if direction < 0 {
-        if line_idx == 0 { return cursor_byte; }
+        if line_idx == 0 {
+            return cursor_byte;
+        }
         line_idx - 1
     } else {
-        if line_idx + 1 >= starts.len() { return cursor_byte; }
+        if line_idx + 1 >= starts.len() {
+            return cursor_byte;
+        }
         line_idx + 1
     };
     let (start, end) = line_range(text, &starts, target_line);
@@ -761,7 +785,12 @@ fn render_remote_cursors(
         let col = col.min(cols.saturating_sub(1)) as u16;
         let cell = cursor_cell_char(text, *pos);
         let color = color_for_user(user_id);
-        queue!(out, MoveTo(col, row), SetBackgroundColor(color), SetForegroundColor(Color::Black))?;
+        queue!(
+            out,
+            MoveTo(col, row),
+            SetBackgroundColor(color),
+            SetForegroundColor(Color::Black)
+        )?;
         out.write_all(cell.to_string().as_bytes())?;
         queue!(out, SetAttribute(Attribute::Reset))?;
     }
@@ -783,7 +812,12 @@ fn render_local_cursor(
     let row = (line - *scroll) as u16;
     let col = col.min(cols.saturating_sub(1)) as u16;
     let cell = cursor_cell_char(text, cursor_byte);
-    queue!(out, MoveTo(col, row), SetBackgroundColor(Color::White), SetForegroundColor(Color::Black))?;
+    queue!(
+        out,
+        MoveTo(col, row),
+        SetBackgroundColor(Color::White),
+        SetForegroundColor(Color::Black)
+    )?;
     out.write_all(cell.to_string().as_bytes())?;
     queue!(out, SetAttribute(Attribute::Reset))?;
     Ok(())
