@@ -7,8 +7,7 @@ use crate::protocol::{
     make_scoped_user_id,
     Op,
 };
-use mdcs_sdk::{Awareness, Message};
-use mdcs_sdk::TextDoc;
+use mdcs_sdk::{Awareness, CollaborativeDoc, Message, TextDoc};
 use std::collections::HashMap;
 use std::error::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -140,7 +139,15 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                         }
                     } else {
                         apply_local_op(&mut doc_state, &op);
-                        let msg = encode_update(&doc_id, local_user_id.as_deref().unwrap_or(""), op, version);
+                        let deltas = doc_state.take_pending_deltas();
+                        let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
+                        let msg = encode_update(
+                            &doc_id,
+                            local_user_id.as_deref().unwrap_or(""),
+                            op,
+                            delta,
+                            version,
+                        );
                         if out_tx.send(msg).await.is_err() {
                             println!("[client] failed to send message");
                             break;
@@ -184,6 +191,9 @@ fn apply_server_message(
                     return;
                 }
                 if Some(payload.user_id.clone()) != *local_user_id {
+                    if !payload.delta.is_empty() {
+                        doc_state.apply_remote(&payload.delta);
+                    }
                     apply_op_to_doc(doc_state, &payload.op);
                 }
                 *version = server_version;

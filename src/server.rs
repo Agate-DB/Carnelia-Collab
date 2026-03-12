@@ -7,8 +7,7 @@ use crate::protocol::{
     WireUser,
 };
 use crate::storage::Storage;
-use mdcs_sdk::Message;
-use mdcs_sdk::TextDoc;
+use mdcs_sdk::{CollaborativeDoc, Message, TextDoc};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
@@ -319,11 +318,13 @@ async fn handle_update(
         );
     }
 
-    let (updated_text, version, op) = {
+    let (updated_text, version, op, delta) = {
         let doc_state = guard.docs.get_mut(&doc_key).expect("doc exists");
         apply_op_to_doc(doc_state, &payload.user_id, &payload.op);
+        let deltas = doc_state.doc.take_pending_deltas();
+        let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
         doc_state.version += 1;
-        (doc_state.doc.get_text(), doc_state.version, payload.op)
+        (doc_state.doc.get_text(), doc_state.version, payload.op, delta)
     };
 
     let _ = guard.storage.save_text(room, doc, &updated_text);
@@ -338,7 +339,7 @@ async fn handle_update(
             });
         }
         _ => {
-            let update = encode_update(&doc_key, &payload.user_id, op, version);
+            let update = encode_update(&doc_key, &payload.user_id, op, delta, version);
             let _ = broadcast_tx.send(update);
         }
     }

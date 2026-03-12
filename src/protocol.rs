@@ -12,6 +12,7 @@ pub enum Op {
 pub struct WireUpdate {
     pub user_id: String,
     pub op: Op,
+    pub delta: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,10 +27,17 @@ pub struct WireUser {
     pub name: String,
 }
 
-pub fn encode_update(document_id: &str, user_id: &str, op: Op, version: u64) -> Message {
+pub fn encode_update(
+    document_id: &str,
+    user_id: &str,
+    op: Op,
+    delta: Vec<u8>,
+    version: u64,
+) -> Message {
     let payload = WireUpdate {
         user_id: user_id.to_string(),
         op,
+        delta,
     };
     let delta = serde_json::to_vec(&payload).unwrap_or_default();
     Message::Update {
@@ -109,12 +117,14 @@ mod tests {
                 pos: 1,
                 text: "hi".to_string(),
             },
+            vec![1, 2, 3],
             5,
         );
         let (doc_id, payload, version) = decode_update(&msg).expect("decode");
         assert_eq!(doc_id, "room/doc.txt");
         assert_eq!(version, 5);
         assert_eq!(payload.user_id, "room/doc.txt|user-1");
+        assert_eq!(payload.delta, vec![1, 2, 3]);
         match payload.op {
             Op::Insert { pos, text } => {
                 assert_eq!(pos, 1);

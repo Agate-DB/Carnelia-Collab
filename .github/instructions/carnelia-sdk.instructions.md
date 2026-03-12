@@ -1,3 +1,10 @@
+---
+name: carnelia-sdk
+description: High-level Rust SDK for building collaborative, offline-first applications on the MDCS (Merkle-Delta CRDT Store). Use when working with CRDT documents, peer-to-peer sync, real-time presence/awareness, text/rich-text/JSON collaboration, network transport, or any type in the mdcs-sdk namespace.
+metadata:
+  tags: crdt, collaborative, sdk, real-time, offline-first, mdcs, delta, sync, presence, document, merkle, peer-to-peer
+---
+
 # Carnelia SDK (`mdcs-sdk`)
 
 Ergonomic, async-first Rust SDK for building real-time collaborative applications on top of the MDCS (Merkle-Delta CRDT Store). Provides document management, peer-to-peer networking, synchronization, and presence awareness — all backed by formally convergent CRDTs.

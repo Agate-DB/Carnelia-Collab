@@ -12,7 +12,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 use crossterm::style::{Attribute, Color, SetAttribute, SetBackgroundColor, SetForegroundColor};
-use mdcs_sdk::{Awareness, Message, TextDoc};
+use mdcs_sdk::{Awareness, CollaborativeDoc, Message, TextDoc};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{stdout, Write};
@@ -167,6 +167,9 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                             if let Some((update_doc_id, payload, server_version)) = decode_update(&msg) {
                                 if update_doc_id == doc_id {
                                     if Some(payload.user_id.clone()) != local_user_id {
+                                        if !payload.delta.is_empty() {
+                                            doc_state.apply_remote(&payload.delta);
+                                        }
                                         adjust_cursor_for_remote(&payload.op, &mut cursor_byte);
                                         apply_op_to_doc(&mut doc_state, &payload.op);
                                     }
@@ -355,10 +358,13 @@ fn handle_key(
                 let len = *cursor_byte - start;
                 apply_delete(doc_state, start, len);
                 *cursor_byte = start;
+                let deltas = doc_state.take_pending_deltas();
+                let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
                 let _ = out_tx.try_send(encode_update(
                     doc_id,
                     local_user_id.unwrap_or(""),
                     Op::Delete { pos: start, len },
+                    delta,
                     version,
                 ));
                 awareness.set_cursor(doc_id, *cursor_byte);
@@ -376,10 +382,13 @@ fn handle_key(
                 let len = end - *cursor_byte;
                 if len > 0 {
                     apply_delete(doc_state, *cursor_byte, len);
+                    let deltas = doc_state.take_pending_deltas();
+                    let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
                     let _ = out_tx.try_send(encode_update(
                         doc_id,
                         local_user_id.unwrap_or(""),
                         Op::Delete { pos: *cursor_byte, len },
+                        delta,
                         version,
                     ));
                     awareness.set_cursor(doc_id, *cursor_byte);
@@ -395,10 +404,13 @@ fn handle_key(
         KeyCode::Enter => {
             let insert = "\n".to_string();
             apply_insert(doc_state, *cursor_byte, &insert);
+            let deltas = doc_state.take_pending_deltas();
+            let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
             let _ = out_tx.try_send(encode_update(
                 doc_id,
                 local_user_id.unwrap_or(""),
                 Op::Insert { pos: *cursor_byte, text: insert },
+                delta,
                 version,
             ));
             *cursor_byte += 1;
@@ -423,10 +435,13 @@ fn handle_key(
             let insert = ch.to_string();
             let insert_len = insert.len();
             apply_insert(doc_state, *cursor_byte, &insert);
+            let deltas = doc_state.take_pending_deltas();
+            let delta = if deltas.len() == 1 { deltas[0].clone() } else { Vec::new() };
             let _ = out_tx.try_send(encode_update(
                 doc_id,
                 local_user_id.unwrap_or(""),
                 Op::Insert { pos: *cursor_byte, text: insert },
+                delta,
                 version,
             ));
             *cursor_byte += insert_len;
