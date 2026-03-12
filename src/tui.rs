@@ -12,7 +12,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 use crossterm::style::{Attribute, Color, SetAttribute, SetBackgroundColor, SetForegroundColor};
-use mdcs_sdk::{Message, TextDoc};
+use mdcs_sdk::{Awareness, Message, TextDoc};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{stdout, Write};
@@ -69,6 +69,7 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
     let scoped_user_id = make_scoped_user_id(&doc_id, &raw_user_id);
     let mut doc_state = TextDoc::new(doc_id.clone(), scoped_user_id.clone());
     let local_user_id: Option<String> = Some(scoped_user_id.clone());
+    let awareness = Awareness::new(scoped_user_id.clone(), user.to_string());
 
     out_tx
         .send(Message::Hello {
@@ -166,15 +167,8 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                             if let Some((update_doc_id, payload, server_version)) = decode_update(&msg) {
                                 if update_doc_id == doc_id {
                                     if Some(payload.user_id.clone()) != local_user_id {
-                                        match payload.op {
-                                            Op::Cursor { pos } => {
-                                                cursors.insert(payload.user_id, pos);
-                                            }
-                                            _ => {
-                                                adjust_cursor_for_remote(&payload.op, &mut cursor_byte);
-                                                apply_op_to_doc(&mut doc_state, &payload.op);
-                                            }
-                                        }
+                                        adjust_cursor_for_remote(&payload.op, &mut cursor_byte);
+                                        apply_op_to_doc(&mut doc_state, &payload.op);
                                     }
                                     version = server_version;
                                     cursor_byte = cursor_byte.min(doc_state.get_text().len());
@@ -232,6 +226,7 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                             &doc_id,
                             local_user_id.as_deref(),
                             version,
+                            &awareness,
                             &mut status_msg,
                         ) {
                             dirty = true;
@@ -281,6 +276,7 @@ fn handle_key(
     doc_id: &str,
     local_user_id: Option<&str>,
     version: u64,
+    awareness: &Awareness,
     status_msg: &mut String,
 ) -> bool {
     if key.code == KeyCode::Esc {
@@ -295,62 +291,62 @@ fn handle_key(
     match key.code {
         KeyCode::Left => {
             *cursor_byte = prev_char_boundary(&text, *cursor_byte);
-            let _ = out_tx.try_send(encode_update(
-                doc_id,
-                local_user_id.unwrap_or(""),
-                Op::Cursor { pos: *cursor_byte },
-                version,
-            ));
+            awareness.set_cursor(doc_id, *cursor_byte);
+            let _ = out_tx.try_send(Message::Presence {
+                user_id: local_user_id.unwrap_or("").to_string(),
+                document_id: doc_id.to_string(),
+                cursor_pos: Some(*cursor_byte),
+            });
             true
         }
         KeyCode::Right => {
             *cursor_byte = next_char_boundary(&text, *cursor_byte);
-            let _ = out_tx.try_send(encode_update(
-                doc_id,
-                local_user_id.unwrap_or(""),
-                Op::Cursor { pos: *cursor_byte },
-                version,
-            ));
+            awareness.set_cursor(doc_id, *cursor_byte);
+            let _ = out_tx.try_send(Message::Presence {
+                user_id: local_user_id.unwrap_or("").to_string(),
+                document_id: doc_id.to_string(),
+                cursor_pos: Some(*cursor_byte),
+            });
             true
         }
         KeyCode::Up => {
             *cursor_byte = move_cursor_vertical(&text, *cursor_byte, -1);
-            let _ = out_tx.try_send(encode_update(
-                doc_id,
-                local_user_id.unwrap_or(""),
-                Op::Cursor { pos: *cursor_byte },
-                version,
-            ));
+            awareness.set_cursor(doc_id, *cursor_byte);
+            let _ = out_tx.try_send(Message::Presence {
+                user_id: local_user_id.unwrap_or("").to_string(),
+                document_id: doc_id.to_string(),
+                cursor_pos: Some(*cursor_byte),
+            });
             true
         }
         KeyCode::Down => {
             *cursor_byte = move_cursor_vertical(&text, *cursor_byte, 1);
-            let _ = out_tx.try_send(encode_update(
-                doc_id,
-                local_user_id.unwrap_or(""),
-                Op::Cursor { pos: *cursor_byte },
-                version,
-            ));
+            awareness.set_cursor(doc_id, *cursor_byte);
+            let _ = out_tx.try_send(Message::Presence {
+                user_id: local_user_id.unwrap_or("").to_string(),
+                document_id: doc_id.to_string(),
+                cursor_pos: Some(*cursor_byte),
+            });
             true
         }
         KeyCode::Home => {
             *cursor_byte = line_start(&text, *cursor_byte);
-            let _ = out_tx.try_send(encode_update(
-                doc_id,
-                local_user_id.unwrap_or(""),
-                Op::Cursor { pos: *cursor_byte },
-                version,
-            ));
+            awareness.set_cursor(doc_id, *cursor_byte);
+            let _ = out_tx.try_send(Message::Presence {
+                user_id: local_user_id.unwrap_or("").to_string(),
+                document_id: doc_id.to_string(),
+                cursor_pos: Some(*cursor_byte),
+            });
             true
         }
         KeyCode::End => {
             *cursor_byte = line_end(&text, *cursor_byte);
-            let _ = out_tx.try_send(encode_update(
-                doc_id,
-                local_user_id.unwrap_or(""),
-                Op::Cursor { pos: *cursor_byte },
-                version,
-            ));
+            awareness.set_cursor(doc_id, *cursor_byte);
+            let _ = out_tx.try_send(Message::Presence {
+                user_id: local_user_id.unwrap_or("").to_string(),
+                document_id: doc_id.to_string(),
+                cursor_pos: Some(*cursor_byte),
+            });
             true
         }
         KeyCode::Backspace => {
@@ -365,12 +361,12 @@ fn handle_key(
                     Op::Delete { pos: start, len },
                     version,
                 ));
-                let _ = out_tx.try_send(encode_update(
-                    doc_id,
-                    local_user_id.unwrap_or(""),
-                    Op::Cursor { pos: *cursor_byte },
-                    version,
-                ));
+                awareness.set_cursor(doc_id, *cursor_byte);
+                let _ = out_tx.try_send(Message::Presence {
+                    user_id: local_user_id.unwrap_or("").to_string(),
+                    document_id: doc_id.to_string(),
+                    cursor_pos: Some(*cursor_byte),
+                });
             }
             true
         }
@@ -386,12 +382,12 @@ fn handle_key(
                         Op::Delete { pos: *cursor_byte, len },
                         version,
                     ));
-                    let _ = out_tx.try_send(encode_update(
-                        doc_id,
-                        local_user_id.unwrap_or(""),
-                        Op::Cursor { pos: *cursor_byte },
-                        version,
-                    ));
+                    awareness.set_cursor(doc_id, *cursor_byte);
+                    let _ = out_tx.try_send(Message::Presence {
+                        user_id: local_user_id.unwrap_or("").to_string(),
+                        document_id: doc_id.to_string(),
+                        cursor_pos: Some(*cursor_byte),
+                    });
                 }
             }
             true
@@ -406,12 +402,12 @@ fn handle_key(
                 version,
             ));
             *cursor_byte += 1;
-            let _ = out_tx.try_send(encode_update(
-                doc_id,
-                local_user_id.unwrap_or(""),
-                Op::Cursor { pos: *cursor_byte },
-                version,
-            ));
+            awareness.set_cursor(doc_id, *cursor_byte);
+            let _ = out_tx.try_send(Message::Presence {
+                user_id: local_user_id.unwrap_or("").to_string(),
+                document_id: doc_id.to_string(),
+                cursor_pos: Some(*cursor_byte),
+            });
             true
         }
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -434,12 +430,12 @@ fn handle_key(
                 version,
             ));
             *cursor_byte += insert_len;
-            let _ = out_tx.try_send(encode_update(
-                doc_id,
-                local_user_id.unwrap_or(""),
-                Op::Cursor { pos: *cursor_byte },
-                version,
-            ));
+            awareness.set_cursor(doc_id, *cursor_byte);
+            let _ = out_tx.try_send(Message::Presence {
+                user_id: local_user_id.unwrap_or("").to_string(),
+                document_id: doc_id.to_string(),
+                cursor_pos: Some(*cursor_byte),
+            });
             true
         }
         _ => false,

@@ -7,7 +7,7 @@ use crate::protocol::{
     make_scoped_user_id,
     Op,
 };
-use mdcs_sdk::Message;
+use mdcs_sdk::{Awareness, Message};
 use mdcs_sdk::TextDoc;
 use std::collections::HashMap;
 use std::error::Error;
@@ -43,6 +43,7 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
     let scoped_user_id = make_scoped_user_id(&doc_id, &raw_user_id);
     let replica_id = scoped_user_id.clone();
     let mut doc_state = TextDoc::new(doc_id.clone(), replica_id.clone());
+    let awareness = Awareness::new(replica_id.clone(), user.to_string());
     let mut local_user_id: Option<String> = Some(replica_id.clone());
 
     out_tx
@@ -124,11 +125,26 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                 }
 
                 if let Some(op) = parse_command(&input) {
-                    apply_local_op(&mut doc_state, &op);
-                    let msg = encode_update(&doc_id, local_user_id.as_deref().unwrap_or(""), op, version);
-                    if out_tx.send(msg).await.is_err() {
-                        println!("[client] failed to send message");
-                        break;
+                    if let Op::Cursor { pos } = op {
+                        awareness.set_cursor(&doc_id, pos);
+                        if let Some(user_id) = local_user_id.as_deref() {
+                            let msg = Message::Presence {
+                                user_id: user_id.to_string(),
+                                document_id: doc_id.clone(),
+                                cursor_pos: Some(pos),
+                            };
+                            if out_tx.send(msg).await.is_err() {
+                                println!("[client] failed to send presence");
+                                break;
+                            }
+                        }
+                    } else {
+                        apply_local_op(&mut doc_state, &op);
+                        let msg = encode_update(&doc_id, local_user_id.as_deref().unwrap_or(""), op, version);
+                        if out_tx.send(msg).await.is_err() {
+                            println!("[client] failed to send message");
+                            break;
+                        }
                     }
                 } else if !input.trim().is_empty() {
                     println!("[client] unknown command, try /help");

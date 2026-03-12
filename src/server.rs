@@ -224,7 +224,34 @@ async fn handle_connection(
                         )
                         .await;
                     }
-                    Message::Presence { .. } | Message::SyncResponse { .. } => {}
+                    Message::Presence {
+                        user_id,
+                        document_id,
+                        cursor_pos,
+                    } => {
+                        if let (Some(room), Some(doc)) = (current_room.as_deref(), current_doc.as_deref()) {
+                            if document_id == doc_key(room, doc) {
+                                let mut guard = state.lock().await;
+                                if let Some(doc_state) = guard.docs.get_mut(&document_id) {
+                                    match cursor_pos {
+                                        Some(pos) => {
+                                            doc_state.cursors.insert(user_id.clone(), pos);
+                                        }
+                                        None => {
+                                            doc_state.cursors.remove(&user_id);
+                                        }
+                                    }
+                                }
+                                drop(guard);
+                                let _ = broadcast_tx.send(Message::Presence {
+                                    user_id,
+                                    document_id,
+                                    cursor_pos,
+                                });
+                            }
+                        }
+                    }
+                    Message::SyncResponse { .. } => {}
                     Message::Ack { .. } | Message::Ping | Message::Pong => {}
                 }
             }
@@ -302,8 +329,19 @@ async fn handle_update(
     let _ = guard.storage.save_text(room, doc, &updated_text);
     drop(guard);
 
-    let update = encode_update(&doc_key, &payload.user_id, op, version);
-    let _ = broadcast_tx.send(update);
+    match op {
+        Op::Cursor { pos } => {
+            let _ = broadcast_tx.send(Message::Presence {
+                user_id: payload.user_id,
+                document_id: doc_key,
+                cursor_pos: Some(pos),
+            });
+        }
+        _ => {
+            let update = encode_update(&doc_key, &payload.user_id, op, version);
+            let _ = broadcast_tx.send(update);
+        }
+    }
 }
 
 fn should_forward(msg: &Message, room: Option<&str>, doc: Option<&str>) -> bool {
