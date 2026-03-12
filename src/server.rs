@@ -223,26 +223,26 @@ async fn handle_connection(
                         document_id,
                         cursor_pos,
                     } => {
-                        if let (Some(room), Some(doc)) = (current_room.as_deref(), current_doc.as_deref()) {
-                            if document_id == doc_key(room, doc) {
-                                let mut guard = state.lock().await;
-                                if let Some(doc_state) = guard.docs.get_mut(&document_id) {
-                                    match cursor_pos {
-                                        Some(pos) => {
-                                            doc_state.cursors.insert(user_id.clone(), pos);
-                                        }
-                                        None => {
-                                            doc_state.cursors.remove(&user_id);
-                                        }
+                        if let (Some(room), Some(doc)) = (current_room.as_deref(), current_doc.as_deref())
+                            && document_id == doc_key(room, doc)
+                        {
+                            let mut guard = state.lock().await;
+                            if let Some(doc_state) = guard.docs.get_mut(&document_id) {
+                                match cursor_pos {
+                                    Some(pos) => {
+                                        doc_state.cursors.insert(user_id.clone(), pos);
+                                    }
+                                    None => {
+                                        doc_state.cursors.remove(&user_id);
                                     }
                                 }
-                                drop(guard);
-                                let _ = broadcast_tx.send(Message::Presence {
-                                    user_id,
-                                    document_id,
-                                    cursor_pos,
-                                });
                             }
+                            drop(guard);
+                            let _ = broadcast_tx.send(Message::Presence {
+                                user_id,
+                                document_id,
+                                cursor_pos,
+                            });
                         }
                     }
                     Message::SyncResponse { .. } => {}
@@ -250,10 +250,10 @@ async fn handle_connection(
                 }
             }
             event = broadcast_rx.recv() => {
-                if let Ok(event) = event {
-                    if should_forward(&event, current_room.as_deref(), current_doc.as_deref()) {
-                        let _ = out_tx.send(event).await;
-                    }
+                if let Ok(event) = event
+                    && should_forward(&event, current_room.as_deref(), current_doc.as_deref())
+                {
+                    let _ = out_tx.send(event).await;
                 }
             }
         }

@@ -78,16 +78,16 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                     Err(_) => continue,
                 };
 
-                apply_server_message(
-                    &msg,
-                    &doc_id,
-                    &replica_id,
-                    &mut doc_state,
-                    &mut version,
-                    &mut local_user_id,
-                    &mut users,
-                    &mut cursors,
-                );
+                let mut ctx = ClientContext {
+                    doc_id: &doc_id,
+                    replica_id: &replica_id,
+                    doc_state: &mut doc_state,
+                    version: &mut version,
+                    local_user_id: &mut local_user_id,
+                    users: &mut users,
+                    cursors: &mut cursors,
+                };
+                apply_server_message(&msg, &mut ctx);
             }
             input = stdin_lines.next_line() => {
                 let input = match input {
@@ -157,39 +157,40 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
     Ok(())
 }
 
-fn apply_server_message(
-    msg: &Message,
-    doc_id: &str,
-    replica_id: &str,
-    doc_state: &mut TextDoc,
-    version: &mut u64,
-    local_user_id: &mut Option<String>,
-    users: &mut HashMap<String, String>,
-    cursors: &mut HashMap<String, usize>,
-) {
+struct ClientContext<'a> {
+    doc_id: &'a str,
+    replica_id: &'a str,
+    doc_state: &'a mut TextDoc,
+    version: &'a mut u64,
+    local_user_id: &'a mut Option<String>,
+    users: &'a mut HashMap<String, String>,
+    cursors: &'a mut HashMap<String, usize>,
+}
+
+fn apply_server_message(msg: &Message, ctx: &mut ClientContext<'_>) {
     match msg {
         Message::Hello {
             replica_id,
             user_name,
         } => {
-            if doc_id_from_scoped_user_id(replica_id) != Some(doc_id) {
+            if doc_id_from_scoped_user_id(replica_id) != Some(ctx.doc_id) {
                 return;
             }
-            users.insert(replica_id.clone(), user_name.clone());
+            ctx.users.insert(replica_id.clone(), user_name.clone());
             println!("[client] user online: {}", user_name);
         }
         Message::Update { .. } => {
             if let Some((update_doc_id, payload, server_version)) = decode_update(msg) {
-                if update_doc_id != doc_id {
+                if update_doc_id != ctx.doc_id {
                     return;
                 }
-                if Some(payload.user_id.clone()) != *local_user_id {
+                if Some(payload.user_id.clone()) != *ctx.local_user_id {
                     if !payload.delta.is_empty() {
-                        doc_state.apply_remote(&payload.delta);
+                        ctx.doc_state.apply_remote(&payload.delta);
                     }
-                    apply_op_to_doc(doc_state, &payload.op);
+                    apply_op_to_doc(ctx.doc_state, &payload.op);
                 }
-                *version = server_version;
+                *ctx.version = server_version;
             }
         }
         Message::Presence {
@@ -197,34 +198,34 @@ fn apply_server_message(
             document_id,
             cursor_pos,
         } => {
-            if document_id != doc_id {
+            if document_id != ctx.doc_id {
                 return;
             }
             match cursor_pos {
                 Some(pos) => {
-                    cursors.insert(user_id.clone(), *pos);
+                    ctx.cursors.insert(user_id.clone(), *pos);
                 }
                 None => {
-                    cursors.remove(user_id);
-                    users.remove(user_id);
+                    ctx.cursors.remove(user_id);
+                    ctx.users.remove(user_id);
                 }
             }
         }
         Message::SyncResponse { .. } => {
             if let Some((sync_doc_id, payload, server_version)) = decode_sync_response(msg) {
-                if sync_doc_id != doc_id {
+                if sync_doc_id != ctx.doc_id {
                     return;
                 }
-                *doc_state = build_doc(doc_id, replica_id, &payload.text);
-                *version = server_version;
-                cursors.clear();
-                users.clear();
+                *ctx.doc_state = build_doc(ctx.doc_id, ctx.replica_id, &payload.text);
+                *ctx.version = server_version;
+                ctx.cursors.clear();
+                ctx.users.clear();
                 for user in payload.users {
-                    users.insert(user.id, user.name);
+                    ctx.users.insert(user.id, user.name);
                 }
-                *local_user_id = Some(replica_id.to_string());
-                println!("[client] sync complete (v{})", version);
-                print_document(&doc_state.get_text());
+                *ctx.local_user_id = Some(ctx.replica_id.to_string());
+                println!("[client] sync complete (v{})", *ctx.version);
+                print_document(&ctx.doc_state.get_text());
             }
         }
         Message::Ack { .. } | Message::Ping | Message::Pong | Message::SyncRequest { .. } => {}
