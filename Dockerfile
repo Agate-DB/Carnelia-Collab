@@ -1,12 +1,13 @@
 # syntax=docker/dockerfile:1
 
-FROM rust:1.89.0-bookworm AS builder
+FROM rust:1.94-slim-bookworm AS builder
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
-RUN cargo build --release
+RUN rustup target add x86_64-unknown-linux-musl
+RUN cargo build --target x86_64-unknown-linux-musl --release
 
 FROM debian:bookworm-slim
 WORKDIR /app
@@ -21,7 +22,7 @@ RUN curl -sSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.t
 
 RUN useradd -m appuser && mkdir -p /app/data && chown -R appuser /app
 
-COPY --from=builder /app/target/release/carnelia-collab /app/carnelia-collab
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/carnelia-collab /app/carnelia-collab
 COPY deploy/ngrok.yml /app/ngrok.yml
 COPY deploy/entrypoint.sh /app/entrypoint.sh
 
