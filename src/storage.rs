@@ -53,4 +53,3 @@ fn sanitize_component(input: &str) -> String {
         out
     }
 }
-

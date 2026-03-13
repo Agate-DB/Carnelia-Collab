@@ -1,5 +1,8 @@
-use crate::protocol::{ClientMessage, Op, ServerMessage};
-use mdcs_sdk::TextDoc;
+use crate::protocol::{
+    Op, decode_sync_response, decode_update, doc_id_from_scoped_user_id, encode_sync_request,
+    encode_update, make_scoped_user_id,
+};
+use mdcs_sdk::{Awareness, Message, TextDoc};
 use std::collections::HashMap;
 use std::error::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -11,7 +14,7 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
     let stream = TcpStream::connect(addr).await?;
     let (reader, writer) = stream.into_split();
 
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ClientMessage>();
+    let (out_tx, mut out_rx) = mpsc::channel::<Message>(64);
 
     let writer_task = tokio::spawn(async move {
         let mut writer = writer;
@@ -29,11 +32,21 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
         }
     });
 
-    out_tx.send(ClientMessage::Join {
-        user: user.to_string(),
-        room: room.to_string(),
-        doc: doc.to_string(),
-    })?;
+    let doc_id = format!("{}/{}", room, doc);
+    let raw_user_id = format!("{}-{}", user, unique_suffix());
+    let scoped_user_id = make_scoped_user_id(&doc_id, &raw_user_id);
+    let replica_id = scoped_user_id.clone();
+    let mut doc_state = TextDoc::new(doc_id.clone(), replica_id.clone());
+    let awareness = Awareness::new(replica_id.clone(), user.to_string());
+    let mut local_user_id: Option<String> = Some(replica_id.clone());
+
+    out_tx
+        .send(Message::Hello {
+            replica_id: scoped_user_id.clone(),
+            user_name: user.to_string(),
+        })
+        .await?;
+    out_tx.send(encode_sync_request(&doc_id, 0)).await?;
 
     println!("[client] joined room '{}' doc '{}'", room, doc);
     println!("[client] type /help for commands");
@@ -41,14 +54,9 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
     let mut server_lines = BufReader::new(reader).lines();
     let mut stdin_lines = BufReader::new(tokio::io::stdin()).lines();
 
-    let doc_id = format!("{}/{}", room, doc);
-    let replica_id = format!("{}-{}", user, unique_suffix());
-    let mut doc_state = TextDoc::new(doc_id.clone(), replica_id.clone());
-    let mut local_user_id: Option<usize> = None;
-
     let mut version = 0u64;
-    let mut users: HashMap<usize, String> = HashMap::new();
-    let mut cursors: HashMap<usize, usize> = HashMap::new();
+    let mut users: HashMap<String, String> = HashMap::new();
+    let mut cursors: HashMap<String, usize> = HashMap::new();
 
     loop {
         tokio::select! {
@@ -65,21 +73,21 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                     }
                 };
 
-                let msg: ServerMessage = match serde_json::from_str(&line) {
+                let msg: Message = match serde_json::from_str(&line) {
                     Ok(msg) => msg,
                     Err(_) => continue,
                 };
 
-                apply_server_message(
-                    &msg,
-                    &doc_id,
-                    &replica_id,
-                    &mut doc_state,
-                    &mut version,
-                    &mut local_user_id,
-                    &mut users,
-                    &mut cursors,
-                );
+                let mut ctx = ClientContext {
+                    doc_id: &doc_id,
+                    replica_id: &replica_id,
+                    doc_state: &mut doc_state,
+                    version: &mut version,
+                    local_user_id: &mut local_user_id,
+                    users: &mut users,
+                    cursors: &mut cursors,
+                };
+                apply_server_message(&msg, &mut ctx);
             }
             input = stdin_lines.next_line() => {
                 let input = match input {
@@ -101,15 +109,49 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
                 }
 
                 if input.trim().eq_ignore_ascii_case("/sync") {
-                    let _ = out_tx.send(ClientMessage::SyncRequest);
+                    if out_tx.send(encode_sync_request(&doc_id, version)).await.is_err() {
+                        println!("[client] failed to send sync request");
+                        break;
+                    }
                     continue;
                 }
 
-                if let Some(msg) = parse_command(&input) {
-                    apply_local_op(&mut doc_state, &msg);
-                    if out_tx.send(msg).is_err() {
-                        println!("[client] failed to send message");
-                        break;
+                if let Some(op) = parse_command(&input) {
+                    if let Op::Cursor { pos } = op {
+                        awareness.set_cursor(&doc_id, pos);
+                        if let Some(user_id) = local_user_id.as_deref() {
+                            let msg = Message::Presence {
+                                user_id: user_id.to_string(),
+                                document_id: doc_id.clone(),
+                                cursor_pos: Some(pos),
+                            };
+                            if out_tx.send(msg).await.is_err() {
+                                println!("[client] failed to send presence");
+                                break;
+                            }
+                        }
+                    } else {
+                        apply_local_op(&mut doc_state, &op);
+                        let combined_delta = Vec::new();
+                        let msg = encode_update(
+                            &doc_id,
+                            local_user_id.as_deref().unwrap_or(""),
+                            op,
+                            combined_delta,
+                            version,
+                        );
+                        match msg {
+                            Ok(msg) => {
+                                if out_tx.send(msg).await.is_err() {
+                                    println!("[client] failed to send message");
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                println!("[client] failed to encode update: {}", err);
+                                break;
+                            }
+                        }
                     }
                 } else if !input.trim().is_empty() {
                     println!("[client] unknown command, try /help");
@@ -122,68 +164,81 @@ pub async fn run(addr: &str, user: &str, room: &str, doc: &str) -> Result<(), Bo
     Ok(())
 }
 
-fn apply_server_message(
-    msg: &ServerMessage,
-    doc_id: &str,
-    replica_id: &str,
-    doc_state: &mut TextDoc,
-    version: &mut u64,
-    local_user_id: &mut Option<usize>,
-    users: &mut HashMap<usize, String>,
-    cursors: &mut HashMap<usize, usize>,
-) {
+struct ClientContext<'a> {
+    doc_id: &'a str,
+    replica_id: &'a str,
+    doc_state: &'a mut TextDoc,
+    version: &'a mut u64,
+    local_user_id: &'a mut Option<String>,
+    users: &'a mut HashMap<String, String>,
+    cursors: &'a mut HashMap<String, usize>,
+}
+
+fn apply_server_message(msg: &Message, ctx: &mut ClientContext<'_>) {
     match msg {
-        ServerMessage::Welcome {
-            user_id,
-            text: server_text,
-            version: server_version,
-            users: server_users,
-            ..
+        Message::Hello {
+            replica_id,
+            user_name,
         } => {
-            *doc_state = build_doc(doc_id, replica_id, server_text);
-            *version = *server_version;
-            *local_user_id = Some(*user_id);
-            users.clear();
-            cursors.clear();
-            for user in server_users {
-                users.insert(user.id, user.name.clone());
+            if doc_id_from_scoped_user_id(replica_id) != Some(ctx.doc_id) {
+                return;
             }
-            println!("[client] welcome user_id={} version={}", user_id, version);
-            print_document(&doc_state.get_text());
+            ctx.users.insert(replica_id.clone(), user_name.clone());
+            println!("[client] user online: {}", user_name);
         }
-        ServerMessage::Applied {
+        Message::Update { .. } => {
+            if let Some((update_doc_id, payload, server_version)) = decode_update(msg) {
+                if update_doc_id != ctx.doc_id {
+                    return;
+                }
+                if Some(payload.user_id.clone()) != *ctx.local_user_id {
+                    // Treat `op` as the single source of truth for remote edits.
+                    // Ignore `payload.delta` to avoid double-applying changes.
+                    apply_op_to_doc(ctx.doc_state, &payload.op);
+                }
+                *ctx.version = server_version;
+            }
+        }
+        Message::Presence {
             user_id,
-            op,
-            version: server_version,
-            ..
+            document_id,
+            cursor_pos,
         } => {
-            if Some(*user_id) != *local_user_id {
-                apply_op_to_doc(doc_state, op);
+            if document_id != ctx.doc_id {
+                return;
             }
-            *version = *server_version;
-            println!("[client] applied op from user {} (v{})", user_id, version);
-        }
-        ServerMessage::Presence { users: server_users, .. } => {
-            users.clear();
-            cursors.clear();
-            for user in server_users {
-                users.insert(user.id, user.name.clone());
+            match cursor_pos {
+                Some(pos) => {
+                    ctx.cursors.insert(user_id.clone(), *pos);
+                }
+                None => {
+                    ctx.cursors.remove(user_id);
+                    ctx.users.remove(user_id);
+                }
             }
-            println!("[client] users online: {}", users.len());
         }
-        ServerMessage::SyncResponse { text, version: server_version, .. } => {
-            *doc_state = build_doc(doc_id, replica_id, text);
-            *version = *server_version;
-            cursors.clear();
-            println!("[client] sync complete (v{})", version);
+        Message::SyncResponse { .. } => {
+            if let Some((sync_doc_id, payload, server_version)) = decode_sync_response(msg) {
+                if sync_doc_id != ctx.doc_id {
+                    return;
+                }
+                *ctx.doc_state = build_doc(ctx.doc_id, ctx.replica_id, &payload.text);
+                *ctx.version = server_version;
+                ctx.cursors.clear();
+                ctx.users.clear();
+                for user in payload.users {
+                    ctx.users.insert(user.id, user.name);
+                }
+                *ctx.local_user_id = Some(ctx.replica_id.to_string());
+                println!("[client] sync complete (v{})", *ctx.version);
+                print_document(&ctx.doc_state.get_text());
+            }
         }
-        ServerMessage::Error { message } => {
-            println!("[client] error: {}", message);
-        }
+        Message::Ack { .. } | Message::Ping | Message::Pong | Message::SyncRequest { .. } => {}
     }
 }
 
-fn parse_command(input: &str) -> Option<ClientMessage> {
+fn parse_command(input: &str) -> Option<Op> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;
@@ -211,30 +266,30 @@ fn parse_command(input: &str) -> Option<ClientMessage> {
     None
 }
 
-fn parse_insert(rest: &str) -> Option<ClientMessage> {
+fn parse_insert(rest: &str) -> Option<Op> {
     let mut parts = rest.splitn(2, ' ');
     let pos = parts.next()?.parse::<usize>().ok()?;
     let text = parts.next().unwrap_or("").to_string();
-    Some(ClientMessage::Insert { pos, text })
+    Some(Op::Insert { pos, text })
 }
 
-fn parse_delete(rest: &str) -> Option<ClientMessage> {
+fn parse_delete(rest: &str) -> Option<Op> {
     let mut parts = rest.split_whitespace();
     let pos = parts.next()?.parse::<usize>().ok()?;
     let len = parts.next()?.parse::<usize>().ok()?;
-    Some(ClientMessage::Delete { pos, len })
+    Some(Op::Delete { pos, len })
 }
 
-fn parse_cursor(rest: &str) -> Option<ClientMessage> {
+fn parse_cursor(rest: &str) -> Option<Op> {
     let pos = rest.trim().parse::<usize>().ok()?;
-    Some(ClientMessage::Cursor { pos })
+    Some(Op::Cursor { pos })
 }
 
 fn handle_local_command(
     input: &str,
     text: &str,
-    users: &HashMap<usize, String>,
-    cursors: &HashMap<usize, usize>,
+    users: &HashMap<String, String>,
+    cursors: &HashMap<String, usize>,
 ) -> bool {
     let trimmed = input.trim();
     if trimmed.eq_ignore_ascii_case("/help") {
@@ -290,14 +345,14 @@ fn build_doc(doc_id: &str, replica_id: &str, text: &str) -> TextDoc {
     doc
 }
 
-fn apply_local_op(doc: &mut TextDoc, msg: &ClientMessage) {
-    match msg {
-        ClientMessage::Insert { pos, text } => {
+fn apply_local_op(doc: &mut TextDoc, op: &Op) {
+    match op {
+        Op::Insert { pos, text } => {
             let current = doc.get_text();
             let char_pos = byte_to_char_index(&current, *pos);
             doc.insert(char_pos, text);
         }
-        ClientMessage::Delete { pos, len } => {
+        Op::Delete { pos, len } => {
             let current = doc.get_text();
             if current.is_empty() {
                 return;
@@ -313,7 +368,7 @@ fn apply_local_op(doc: &mut TextDoc, msg: &ClientMessage) {
                 doc.delete(char_start, char_len);
             }
         }
-        ClientMessage::Cursor { .. } | ClientMessage::Join { .. } | ClientMessage::SyncRequest | ClientMessage::Ping => {}
+        Op::Cursor { .. } => {}
     }
 }
 
