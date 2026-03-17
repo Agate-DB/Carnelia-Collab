@@ -4,6 +4,31 @@ Barebones Rust CLI client and server for collaborative plain-text peer to peer e
 
 Uses [Carnelia](https://github.com/Agate-DB/Carnelia) as the backend CRDT engine.
 
+## Installation
+
+### Pre-built binaries (recommended)
+
+**Linux / macOS:**
+```sh
+curl -fsSL https://raw.githubusercontent.com/Agate-DB/Carnelia-Collab/master/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/Agate-DB/Carnelia-Collab/master/install.ps1 | iex
+```
+
+Or download the binary for your platform directly from [GitHub Releases](https://github.com/Agate-DB/Carnelia-Collab/releases).
+
+### From source (requires Rust)
+```sh
+cargo install --git https://github.com/Agate-DB/Carnelia-Collab
+```
+
+After installation, the `carnelia-collab` command is available in your PATH.
+
+---
+
 ## What It Does
 - TCP server that maintains room/doc text state.
 - CLI clients connect, join a room/doc, and send insert/delete/cursor ops.

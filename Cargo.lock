@@ -92,7 +92,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "carnelia-collab"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "crossterm",
@@ -385,9 +385,9 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "mdcs-compaction"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e67dba39fde19241beef0994ec15760a7ec14eadda9d6b3209d317db01a71c90"
+checksum = "1e0a6d16c1bb0047532c1f907745b75957ba2a9e759235a63328eae7996c16c8"
 dependencies = [
  "mdcs-core",
  "mdcs-merkle",
@@ -398,9 +398,9 @@ dependencies = [
 
 [[package]]
 name = "mdcs-core"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c696bbc8a21d70f151a4c1a2838afafa314696ca3edc6b7f68bc72db0a3f8379"
+checksum = "86bb4c3e2ea036933335a77b907b8414ee740e99dfd62918cb3aa63881e450c1"
 dependencies = [
  "serde",
  "ulid",
@@ -408,9 +408,9 @@ dependencies = [
 
 [[package]]
 name = "mdcs-db"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45c65e732a3542bbd793cad34df8f14523611c68f931e385dca4ccdbbd935b2f"
+checksum = "fdfc5c2eee91246951d59076cb6fa08403b111768b5a84bf2a5e6f9373db698c"
 dependencies = [
  "mdcs-compaction",
  "mdcs-core",
@@ -424,9 +424,9 @@ dependencies = [
 
 [[package]]
 name = "mdcs-delta"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad77e7368915a45966ea6469ce7bfa132c160bc4b10422e59143a90638392ba8"
+checksum = "13fcaa3b1bd157cfd10650f39b5703cd63c45f9c02782d1ed893c0044cc965bd"
 dependencies = [
  "mdcs-core",
  "serde",
@@ -434,9 +434,9 @@ dependencies = [
 
 [[package]]
 name = "mdcs-merkle"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d43e3a75f857fc6cdef90b7163371baf7aad23eba259aecf7a7c7378abf102b"
+checksum = "26f20f198c197b58d9e83161756f1327a3efd3824969fc1bbbc34af41ae04bc1"
 dependencies = [
  "mdcs-core",
  "mdcs-delta",
@@ -446,9 +446,9 @@ dependencies = [
 
 [[package]]
 name = "mdcs-sdk"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "987f490cd010f84b8fbce45439af6fc5fa6bb468bf8e2b8a93c96988445e2d85"
+checksum = "e0e67d6b88ebdcaddbbf94bb5ef3afea600708eadb07ab535e6dcb8236858f09"
 dependencies = [
  "async-trait",
  "futures",
