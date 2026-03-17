@@ -3,7 +3,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Agate-DB/Carnelia-Collab/master/install.sh | sh
-#   VERSION=v0.1.1 sh install.sh
+#   VERSION=v0.1.2 sh install.sh
 
 set -e
 

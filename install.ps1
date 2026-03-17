@@ -2,7 +2,7 @@
 #
 # Usage (run in PowerShell as Administrator or adjust $InstallDir):
 #   irm https://raw.githubusercontent.com/Agate-DB/Carnelia-Collab/master/install.ps1 | iex
-#   $env:VERSION="v0.1.1"; irm .../install.ps1 | iex
+#   $env:VERSION="v0.1.2"; irm .../install.ps1 | iex
 
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\Programs\carnelia-collab",
